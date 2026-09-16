@@ -4,10 +4,9 @@ import os
 import sys
 
 from aiogram import Bot, Dispatcher, F
-from aiogram.filters import CommandStart
+from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
-from aiogram.types import BufferedInputFile
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import BufferedInputFile, Message, CallbackQuery
 from aiogram.utils.callback_answer import CallbackAnswer, CallbackAnswerMiddleware
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiohttp import ClientSession, ClientTimeout
@@ -27,6 +26,9 @@ bot = Bot(token=bot_token)
 dp = Dispatcher()
 dp.callback_query.middleware(CallbackAnswerMiddleware())
 
+help_text = ('Бот может: \n'
+             '1. Отправить песню (напиши автора название)')
+
 
 @dp.message(CommandStart())
 async def start(message):
@@ -41,11 +43,19 @@ async def start(message):
 @dp.callback_query(F.data)
 async def callback_handler(call: CallbackQuery, callback_answer: CallbackAnswer, state: FSMContext):
     if call.data == 'helpani':
-        await call.message.answer('''
-        1. Хочу песню (напиши автора название)
-        ''')
+        await call.message.answer(help_text)
     elif call.data == 'put_song_to_playlist':
         pass
+
+
+@dp.message(Command('help'))
+async def help(message: Message):
+    await message.answer(help_text)
+
+
+@dp.message()
+async def get_any(message: Message):
+    await find_song(message)
 
 
 async def find_song(message: Message):
@@ -67,15 +77,6 @@ async def find_song(message: Message):
     log.info(f"Song found: {song_name}, {song_author}, {song_path}")
 
 
-async def put_song_to_playlist(message: Message, state: FSMContext):
-    pass
-
-
-@dp.message()
-async def get_any(message: Message):
-    await find_song(message)
-
-
 async def download_song(url, name):
     if url.endswith('.mp3'):
         try:
@@ -88,6 +89,10 @@ async def download_song(url, name):
             log.error(e)
             raise e
     raise ValueError(f"Invalid url for downloading the song: {url}")
+
+
+async def put_song_to_playlist(message: Message, state: FSMContext):
+    pass
 
 
 async def main():
