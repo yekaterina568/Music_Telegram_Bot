@@ -12,6 +12,7 @@ venv/
 /db
 db.sqlite3
 *.db
+bot/bot
 
 # Python
 __pycache__/
