@@ -65,7 +65,7 @@ async def add_playlist_song(song_id, playlist_id):
 async def show_user_history(telegram_id):
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute('''
-        select s.name, author, path 
+        select s.id, s.name, author
         from song s
         join user u 
         on u.id = s.user_id
@@ -73,6 +73,12 @@ async def show_user_history(telegram_id):
         ''', (telegram_id, ))
         rows = await cur.fetchall()
         return rows
+
+async def find_song_path(song_id):
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute('select name, author, path from song where id = ?', (song_id, ))
+        res = await cur.fetchone()
+        return res
 
 async def find_user(telegram_id):
     async with aiosqlite.connect(DB_PATH) as db:

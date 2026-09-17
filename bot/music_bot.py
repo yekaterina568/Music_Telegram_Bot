@@ -7,7 +7,7 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import BufferedInputFile, Message, CallbackQuery
-from aiogram.utils.callback_answer import CallbackAnswer, CallbackAnswerMiddleware
+from aiogram.utils.callback_answer import CallbackAnswerMiddleware
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiohttp import ClientSession, ClientTimeout
 from dotenv import load_dotenv
@@ -27,7 +27,7 @@ dp = Dispatcher()
 dp.callback_query.middleware(CallbackAnswerMiddleware())
 
 help_text = ('Бот может: \n'
-             '1. Отправить песню (напиши автора название)')
+             '1. Отправить песню. Для этого напиши автора название(может занять время)')
 
 
 @dp.message(CommandStart())
@@ -43,13 +43,16 @@ async def start(message: Message):
 
 
 @dp.callback_query(F.data)
-async def callback_handler(call: CallbackQuery, callback_answer: CallbackAnswer, state: FSMContext):
+async def callback_handler(call: CallbackQuery, state: FSMContext):
     if call.data == 'helpani':
         await call.message.answer(help_text)
     elif call.data == 'put_song_to_playlist':
         pass
     elif call.data == 'user_history':
         await show_history(call)
+    elif call.data.startswith('!'):
+        song_id = int(call.data[1:])
+        await get_song(song_id, call.message)
 
 
 @dp.message(Command('help'))
@@ -74,23 +77,32 @@ async def find_song(message: Message):
     song_name = track['title']
     song_author = track['author']
     song_path = result.base_url.rstrip('/') + track['url_down']
-    file = await download_song(song_path, song_name)
-    await message.answer_audio(audio=file, title=song_name, performer=song_author)
+    await send(song_path, song_name, song_author, message)
 
     user_id = await db.get_or_create_user(message.from_user.first_name, message.from_user.id)
-
     await db.add_song(song_name, song_author, song_path, user_id)
-    log.info(f"Song found: {song_name}, {song_author}, {song_path} for user {user_id}")
 
 
-async def download_song(url, name):
+async def get_song(song_id, message: Message):
+    song = await db.find_song_path(song_id)
+    song_name, song_author, song_path = song
+    await send(song_path, song_name, song_author, message)
+
+
+async def send(song_path, song_name, song_author, message: Message):
+    file = await(download_song(song_path))
+    await message.answer_audio(audio=file, title=song_name, performer=song_author)
+    log.info(f"Song was sent: {song_name}, {song_author}, {song_path}")
+
+
+async def download_song(url):
     if url.endswith('.mp3'):
         try:
             timeout = ClientTimeout(total=60)
             async with ClientSession(timeout=timeout) as session:
                 async with session.get(url) as response:
                     data = await response.read()
-                    return BufferedInputFile(data, f"{name}.mp3")
+                    return BufferedInputFile(data, "song.mp3")
         except Exception as e:
             log.error(e)
             raise e
@@ -107,9 +119,9 @@ async def show_history(call: CallbackQuery):
         await call.message.answer("У тебя пока нет истории")
         return
     builder = InlineKeyboardBuilder()
-    for h in history:
-        song_name, song_author, song_path = h
-        builder.button(text=f"{song_name} {song_author}", callback_data="wait")
+    for i in range(len(history)):
+        song_id, song_name, song_author = history[i]
+        builder.button(text=f"{i + 1}. {song_name} {song_author}", callback_data=f"!{song_id}")
     builder.adjust(1)
     markup = builder.as_markup()
     await call.message.answer("Твоя история: ", reply_markup=markup)
