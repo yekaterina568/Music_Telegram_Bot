@@ -31,13 +31,15 @@ help_text = ('Бот может: \n'
 
 
 @dp.message(CommandStart())
-async def start(message):
+async def start(message: Message):
     builder = InlineKeyboardBuilder()
     builder.button(text='1. Все не то', callback_data='helpani')
     builder.button(text='2. Добавь песню в плейлист', callback_data='put_song_to_playlist')
+    builder.button(text='3. Моя история песен', callback_data='user_history')
     builder.adjust(1)
     markup = builder.as_markup()
     await message.answer(f"Привет! {message.from_user.first_name}. Выбирай: ", reply_markup=markup)
+    await db.get_or_create_user(message.from_user.first_name, message.from_user.id)
 
 
 @dp.callback_query(F.data)
@@ -46,6 +48,8 @@ async def callback_handler(call: CallbackQuery, callback_answer: CallbackAnswer,
         await call.message.answer(help_text)
     elif call.data == 'put_song_to_playlist':
         pass
+    elif call.data == 'user_history':
+        await show_history(call)
 
 
 @dp.message(Command('help'))
@@ -73,8 +77,10 @@ async def find_song(message: Message):
     file = await download_song(song_path, song_name)
     await message.answer_audio(audio=file, title=song_name, performer=song_author)
 
-    await db.add_song(song_name, song_author, song_path)
-    log.info(f"Song found: {song_name}, {song_author}, {song_path}")
+    user_id = await db.get_or_create_user(message.from_user.first_name, message.from_user.id)
+
+    await db.add_song(song_name, song_author, song_path, user_id)
+    log.info(f"Song found: {song_name}, {song_author}, {song_path} for user {user_id}")
 
 
 async def download_song(url, name):
@@ -93,6 +99,20 @@ async def download_song(url, name):
 
 async def put_song_to_playlist(message: Message, state: FSMContext):
     pass
+
+
+async def show_history(call: CallbackQuery):
+    history = await db.show_user_history(call.from_user.id)
+    if not history:
+        await call.message.answer("У тебя пока нет истории")
+        return
+    builder = InlineKeyboardBuilder()
+    for h in history:
+        song_name, song_author, song_path = h
+        builder.button(text=f"{song_name} {song_author}", callback_data="wait")
+    builder.adjust(1)
+    markup = builder.as_markup()
+    await call.message.answer("Твоя история: ", reply_markup=markup)
 
 
 async def main():
