@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 from parse_hitmos.entered_tracks import EnteredTrack
 
 import songs_db as db
+from states import Form
 
 log = logging.getLogger(__name__)
 load_dotenv()
@@ -27,7 +28,7 @@ dp = Dispatcher()
 dp.callback_query.middleware(CallbackAnswerMiddleware())
 
 help_text = ('Бот может: \n'
-             '1. Отправить песню. Для этого напиши автора название(может занять время)')
+             '1. Отправить песню. Для этого введи автора, название песни(может занять время)')
 
 
 @dp.message(CommandStart())
@@ -47,17 +48,54 @@ async def callback_handler(call: CallbackQuery, state: FSMContext):
     if call.data == 'helpani':
         await call.message.answer(help_text)
     elif call.data == 'put_song_to_playlist':
-        pass
+        await get_playlist_name(call, state)
     elif call.data == 'user_history':
         await show_history(call)
     elif call.data.startswith('!'):
         song_id = int(call.data[1:])
         await get_song(song_id, call.message)
+    elif call.data == 'playlist_new_song':
+        log.warning(f'call: {await state.get_state()}')
+        await state.set_state(Form.waiting_song_for_playlist)
 
 
 @dp.message(Command('help'))
 async def help(message: Message):
     await message.answer(help_text)
+
+
+@dp.message(Form.waiting_for_playlist_name)
+async def put_to_playlist(message: Message, state: FSMContext):
+    playlist_name = message.text
+    user = await db.find_user(message.from_user.id)
+    user_id = user[0]
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text='1. Из истории прослушивания', callback_data='user_history')
+    builder.button(text="2. Новая песня(введи автора - название) ", callback_data='playlist_new_song')
+    builder.adjust(1)
+    markup = builder.as_markup()
+
+    await message.answer('Выбери способ добавления в плейлист: ', reply_markup=markup)
+
+    playlist_id = await db.add_playlist(playlist_name, user_id)
+    await state.update_data(playlist_id=playlist_id)
+    log.warning(f'put_to_playlist: {await state.get_state()}')
+
+
+@dp.message(Form.waiting_song_for_playlist)
+async def new_song_to_playlist(message: Message, state: FSMContext):
+    song = message.text.split('-')
+    song_author = song[0].strip()
+    song_name = song[1].strip()
+    playlist_id = state.get_data('playlist_id')
+    user_id = await db.find_user(message.from_user.id)
+
+    song_id = await db.add_song(song_name, song_author, None, user_id)
+    await db.add_playlist_song(song_id[0], playlist_id)
+    await message.answer(f'Песня успешно добавлена в плейлист')
+
+    await state.clear()
 
 
 @dp.message()
@@ -67,7 +105,6 @@ async def get_any(message: Message):
 
 async def find_song(message: Message):
     query = message.text.lower()
-
     result = await asyncio.to_thread(EnteredTrack, query, 10, True)
     items = result.data.get('items', []) if result.data else []
     if not items:
@@ -109,8 +146,10 @@ async def download_song(url):
     raise ValueError(f"Invalid url for downloading the song: {url}")
 
 
-async def put_song_to_playlist(message: Message, state: FSMContext):
-    pass
+async def get_playlist_name(call: CallbackQuery, state: FSMContext):
+    await state.set_state(Form.waiting_for_playlist_name)
+    await call.message.answer('Введи название для плейлиста: ')
+    log.warning(f'get_playlist_name: {await state.get_state()}')
 
 
 async def show_history(call: CallbackQuery):
