@@ -28,6 +28,8 @@ bot = Bot(token=bot_token)
 dp = Dispatcher()
 dp.callback_query.middleware(CallbackAnswerMiddleware())
 
+songs_in_progress = set()
+
 help_text = ('Бот может: \n'
              '1. Отправить песню. Для этого введи автора, название песни(может занять время)')
 
@@ -130,15 +132,30 @@ async def find_song(request):
 
 
 async def get_song_for_history(song_id, message: Message):
-    song = await db.find_song_path(song_id)
-    song_name, song_author, song_path = song
-    await send(song_path, song_name, song_author, message)
+    if song_id in songs_in_progress:
+        return
+    songs_in_progress.add(song_id)
+    try:
+        song = await db.find_song_path(song_id)
+        song_name, song_author, song_path = song
+        await send(song_path, song_name, song_author, message)
+    except Exception as e:
+        await message.answer('Не удалось скачать песню. Попробуй еще раз')
+        log.error(f"Couldn't download song - {song_id}: {e}")
+        return
+    finally:
+        songs_in_progress.remove(song_id)
 
 
 async def send(song_path, song_name, song_author, message: Message):
-    file = await(download_song(song_path))
-    await message.answer_audio(audio=file, title=song_name, performer=song_author)
-    log.info(f"Song was sent: {song_name}, {song_author}, {song_path}")
+    try:
+        file = await(download_song(song_path))
+        await message.answer_audio(audio=file, title=song_name, performer=song_author)
+        log.info(f"Song was sent: {song_name}, {song_author}, {song_path}")
+    except Exception as e:
+        await message.answer('Не удалось скачать песню. Попробуй еще раз')
+        log.error(f"Couldn't download song - {song_path}: {e}")
+        return
 
 
 async def download_song(url):
@@ -150,8 +167,8 @@ async def download_song(url):
                     data = await response.read()
                     return BufferedInputFile(data, "song.mp3")
         except Exception as e:
-            log.error(e)
-            raise e
+            log.error(f"Couldn't download song by {url}: {e}")
+            raise
     raise ValueError(f"Invalid url for downloading the song: {url}")
 
 
