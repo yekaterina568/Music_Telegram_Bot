@@ -12,6 +12,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiohttp import ClientSession, ClientTimeout
 from dotenv import load_dotenv
 from parse_hitmos.entered_tracks import EnteredTrack
+from parse_hitmos.excepts import NoFoundTrack
 
 import songs_db as db
 from states import Form
@@ -53,9 +54,8 @@ async def callback_handler(call: CallbackQuery, state: FSMContext):
         await show_history(call)
     elif call.data.startswith('!'):
         song_id = int(call.data[1:])
-        await get_song(song_id, call.message)
+        await get_song_for_history(song_id, call.message)
     elif call.data == 'playlist_new_song':
-        log.warning(f'call: {await state.get_state()}')
         await state.set_state(Form.waiting_song_for_playlist)
 
 
@@ -80,47 +80,60 @@ async def put_to_playlist(message: Message, state: FSMContext):
 
     playlist_id = await db.add_playlist(playlist_name, user_id)
     await state.update_data(playlist_id=playlist_id)
-    log.warning(f'put_to_playlist: {await state.get_state()}')
 
 
 @dp.message(Form.waiting_song_for_playlist)
 async def new_song_to_playlist(message: Message, state: FSMContext):
     song = message.text.split('-')
-    song_author = song[0].strip()
-    song_name = song[1].strip()
-    playlist_id = state.get_data('playlist_id')
+    if len(song) > 2:
+        await message.answer('Принимается только ввод вида: автор - название \n Попробуй еще раз')
+        return
+    request = song[0] + song[1]
+    song_res = await find_song(request)
+    if song_res is None:
+        await message.answer('Не нашел трек, попробуй еще раз')
+        return
+    song_name, song_author, song_path = song_res
+
+    playlist = await state.get_data()
+    playlist_id = playlist['playlist_id']
     user_id = await db.find_user(message.from_user.id)
 
-    song_id = await db.add_song(song_name, song_author, None, user_id)
-    await db.add_playlist_song(song_id[0], playlist_id)
+    song_id = await db.add_song(song_name, song_author, song_path, user_id[0])
+    await db.add_playlist_song(song_id, playlist_id)
     await message.answer(f'Песня успешно добавлена в плейлист')
-
+    log.info(f'New song: {song_name} was added to playlist {playlist_id}')
     await state.clear()
 
 
 @dp.message()
 async def get_any(message: Message):
-    await find_song(message)
-
-
-async def find_song(message: Message):
-    query = message.text.lower()
-    result = await asyncio.to_thread(EnteredTrack, query, 10, True)
-    items = result.data.get('items', []) if result.data else []
-    if not items:
-        await message.answer("Не нашел трек, попробуй еще раз")
+    song = await find_song(message.text)
+    if song is None:
+        await message.answer('Не нашел трек, попробуй еще раз')
         return
-    track = items[0]
-    song_name = track['title']
-    song_author = track['author']
-    song_path = result.base_url.rstrip('/') + track['url_down']
+    song_name, song_author, song_path = song
     await send(song_path, song_name, song_author, message)
-
     user_id = await db.get_or_create_user(message.from_user.first_name, message.from_user.id)
     await db.add_song(song_name, song_author, song_path, user_id)
 
 
-async def get_song(song_id, message: Message):
+async def find_song(request):
+    query = request.lower().strip()
+    try:
+        result = await asyncio.to_thread(EnteredTrack, query, 10)
+        items = result.data.get('items', [])
+        track = items[0]
+        song_name = track['title']
+        song_author = track['author']
+        song_path = result.base_url.rstrip('/') + track['url_down']
+    except NoFoundTrack as e:
+        log.error(f'Track was not found: {e}')
+        return
+    return song_name, song_author, song_path
+
+
+async def get_song_for_history(song_id, message: Message):
     song = await db.find_song_path(song_id)
     song_name, song_author, song_path = song
     await send(song_path, song_name, song_author, message)
@@ -147,8 +160,8 @@ async def download_song(url):
 
 
 async def get_playlist_name(call: CallbackQuery, state: FSMContext):
-    await state.set_state(Form.waiting_for_playlist_name)
     await call.message.answer('Введи название для плейлиста: ')
+    await state.set_state(Form.waiting_for_playlist_name)
     log.warning(f'get_playlist_name: {await state.get_state()}')
 
 
