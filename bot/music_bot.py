@@ -56,6 +56,7 @@ async def callback_handler(call: CallbackQuery, state: FSMContext):
         song_id = int(call.data[1:])
         await get_song_for_history(song_id, call.message)
     elif call.data == 'playlist_new_song':
+        await call.message.answer('Введи название, автора песни')
         await state.set_state(Form.waiting_song_for_playlist)
 
 
@@ -72,23 +73,18 @@ async def put_to_playlist(message: Message, state: FSMContext):
 
     builder = InlineKeyboardBuilder()
     builder.button(text='1. Из истории прослушивания', callback_data='user_history')
-    builder.button(text="2. Новая песня(введи автора - название) ", callback_data='playlist_new_song')
+    builder.button(text="2. Новая песня", callback_data='playlist_new_song')
     builder.adjust(1)
     markup = builder.as_markup()
 
     await message.answer('Выбери способ добавления в плейлист: ', reply_markup=markup)
-
     playlist_id = await db.add_playlist(playlist_name, user_id)
     await state.update_data(playlist_id=playlist_id)
 
 
 @dp.message(Form.waiting_song_for_playlist)
 async def new_song_to_playlist(message: Message, state: FSMContext):
-    song = message.text.split('-')
-    if len(song) > 2:
-        await message.answer('Принимается только ввод вида: автор - название \n Попробуй еще раз')
-        return
-    request = song[0] + song[1]
+    request = message.text.rstrip()
     song_res = await find_song(request)
     if song_res is None:
         await message.answer('Не нашел трек, попробуй еще раз')
@@ -98,8 +94,8 @@ async def new_song_to_playlist(message: Message, state: FSMContext):
     playlist = await state.get_data()
     playlist_id = playlist['playlist_id']
     user_id = await db.find_user(message.from_user.id)
-
     song_id = await db.add_song(song_name, song_author, song_path, user_id[0])
+
     await db.add_playlist_song(song_id, playlist_id)
     await message.answer(f'Песня успешно добавлена в плейлист')
     log.info(f'New song: {song_name} was added to playlist {playlist_id}')
@@ -162,7 +158,6 @@ async def download_song(url):
 async def get_playlist_name(call: CallbackQuery, state: FSMContext):
     await call.message.answer('Введи название для плейлиста: ')
     await state.set_state(Form.waiting_for_playlist_name)
-    log.warning(f'get_playlist_name: {await state.get_state()}')
 
 
 async def show_history(call: CallbackQuery):
