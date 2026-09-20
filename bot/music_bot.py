@@ -53,13 +53,16 @@ async def callback_handler(call: CallbackQuery, state: FSMContext):
     elif call.data == 'put_song_to_playlist':
         await get_playlist_name(call, state)
     elif call.data == 'user_history':
-        await show_history(call)
+        await show_history(call, state)
     elif call.data.startswith('!'):
         song_id = int(call.data[1:])
         await get_song_for_history(song_id, call.message)
     elif call.data == 'playlist_new_song':
         await call.message.answer('Введи название, автора песни')
         await state.set_state(Form.waiting_song_for_playlist)
+    elif call.data.startswith('@'):
+        song_id = int(call.data[1:])
+        await song_to_playlist(song_id, call.message, state)
 
 
 @dp.message(Command('help'))
@@ -70,8 +73,7 @@ async def help(message: Message):
 @dp.message(Form.waiting_for_playlist_name)
 async def put_to_playlist(message: Message, state: FSMContext):
     playlist_name = message.text
-    user = await db.find_user(message.from_user.id)
-    user_id = user[0]
+    user_id = await db.find_user(message.from_user.id)
 
     builder = InlineKeyboardBuilder()
     builder.button(text='1. Из истории прослушивания', callback_data='user_history')
@@ -80,28 +82,20 @@ async def put_to_playlist(message: Message, state: FSMContext):
     markup = builder.as_markup()
 
     await message.answer('Выбери способ добавления в плейлист: ', reply_markup=markup)
-    playlist_id = await db.add_playlist(playlist_name, user_id)
+    playlist_id = await db.add_or_get_playlist(playlist_name, user_id)
     await state.update_data(playlist_id=playlist_id)
 
 
 @dp.message(Form.waiting_song_for_playlist)
 async def new_song_to_playlist(message: Message, state: FSMContext):
-    request = message.text.rstrip()
-    song_res = await find_song(request)
+    song_res = await find_song(message.text.rstrip())
     if song_res is None:
         await message.answer('Не нашел трек, попробуй еще раз')
         return
     song_name, song_author, song_path = song_res
-
-    playlist = await state.get_data()
-    playlist_id = playlist['playlist_id']
     user_id = await db.find_user(message.from_user.id)
-    song_id = await db.add_song(song_name, song_author, song_path, user_id[0])
-
-    await db.add_playlist_song(song_id, playlist_id)
-    await message.answer(f'Песня успешно добавлена в плейлист')
-    log.info(f'New song: {song_name} was added to playlist {playlist_id}')
-    await state.clear()
+    song_id = await db.add_song(song_name, song_author, song_path, user_id)
+    await song_to_playlist(song_id, message, state)
 
 
 @dp.message()
@@ -131,22 +125,6 @@ async def find_song(request):
     return song_name, song_author, song_path
 
 
-async def get_song_for_history(song_id, message: Message):
-    if song_id in songs_in_progress:
-        return
-    songs_in_progress.add(song_id)
-    try:
-        song = await db.find_song_path(song_id)
-        song_name, song_author, song_path = song
-        await send(song_path, song_name, song_author, message)
-    except Exception as e:
-        await message.answer('Не удалось скачать песню. Попробуй еще раз')
-        log.error(f"Couldn't download song - {song_id}: {e}")
-        return
-    finally:
-        songs_in_progress.remove(song_id)
-
-
 async def send(song_path, song_name, song_author, message: Message):
     try:
         file = await(download_song(song_path))
@@ -155,7 +133,6 @@ async def send(song_path, song_name, song_author, message: Message):
     except Exception as e:
         await message.answer('Не удалось скачать песню. Попробуй еще раз')
         log.error(f"Couldn't download song - {song_path}: {e}")
-        return
 
 
 async def download_song(url):
@@ -177,18 +154,48 @@ async def get_playlist_name(call: CallbackQuery, state: FSMContext):
     await state.set_state(Form.waiting_for_playlist_name)
 
 
-async def show_history(call: CallbackQuery):
+async def show_history(call: CallbackQuery, state: FSMContext):
     history = await db.show_user_history(call.from_user.id)
     if not history:
         await call.message.answer("У тебя пока нет истории")
         return
     builder = InlineKeyboardBuilder()
-    for i in range(len(history)):
-        song_id, song_name, song_author = history[i]
-        builder.button(text=f"{i + 1}. {song_name} {song_author}", callback_data=f"!{song_id}")
+    state_data = await state.get_data()
+    if state_data['playlist_id'] is not None:
+        for i in range(len(history)):
+            song_id, song_name, song_author = history[i]
+            builder.button(text=f"{i + 1}. {song_name} {song_author}", callback_data=f"@{song_id}")
+    else:
+        for i in range(len(history)):
+            song_id, song_name, song_author = history[i]
+            builder.button(text=f"{i + 1}. {song_name} {song_author}", callback_data=f"!{song_id}")
     builder.adjust(1)
     markup = builder.as_markup()
     await call.message.answer("Твоя история: ", reply_markup=markup)
+
+
+async def get_song_for_history(song_id, message: Message):
+    if song_id in songs_in_progress:
+        return
+    songs_in_progress.add(song_id)
+    try:
+        song = await db.find_song_path(song_id)
+        song_name, song_author, song_path = song
+        await send(song_path, song_name, song_author, message)
+    except Exception as e:
+        await message.answer('Не удалось скачать песню. Попробуй еще раз')
+        log.error(f"Couldn't download song - {song_id}: {e}")
+    finally:
+        songs_in_progress.remove(song_id)
+
+
+async def song_to_playlist(song_id, message: Message, state: FSMContext):
+    playlist = await state.get_data()
+    playlist_id = playlist['playlist_id']
+    await db.add_playlist_song(song_id, playlist_id)
+    await message.answer(f'Песня успешно добавлена в плейлист')
+    log.info(f'New song: {song_id} was added to playlist {playlist_id}')
+    await state.clear()
 
 
 async def main():
