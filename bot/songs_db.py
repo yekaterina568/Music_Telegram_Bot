@@ -20,7 +20,8 @@ async def init_db():
                        name varchar(100),                                                                           
                        author varchar(100),                                                                         
                        path varchar,
-                       user_id integer references user(id))''')
+                       user_id integer references user(id),
+                       unique(path, user_id))''')
 
         await db.execute('''                                                                                          
                        create table if not exists playlist(                                                         
@@ -33,7 +34,8 @@ async def init_db():
                        create table if not exists playlist_song(                                                    
                        id integer primary key,                                                                      
                        song_id integer references song(id),                                                         
-                       playlist_id integer references playlist(id))''')
+                       playlist_id integer references playlist(id),
+                       unique(song_id, playlist_id))''')
 
         await db.commit()
 
@@ -43,11 +45,11 @@ async def get_or_create_user(name, telegram_id):
         await db.commit()
         return await find_user(telegram_id)
 
-async def add_song(name, author, path, user_id):
+async def add_or_get_song(name, author, path, user_id):
     async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute('insert into song(name, author, path, user_id) values (?, ?, ?, ?)', (name, author, path, user_id))
+        cur = await db.execute('insert or ignore into song(name, author, path, user_id) values (?, ?, ?, ?)', (name, author, path, user_id))
         await db.commit()
-        return cur.lastrowid
+        return await find_song(path, user_id)
 
 async def add_or_get_playlist(name, user_id):
     async with aiosqlite.connect(DB_PATH) as db:
@@ -57,9 +59,8 @@ async def add_or_get_playlist(name, user_id):
 
 async def add_playlist_song(song_id, playlist_id):
     async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute('insert into playlist_song(song_id, playlist_id) values(?, ?)', (song_id, playlist_id))
+        cur = await db.execute('insert or ignore into playlist_song(song_id, playlist_id) values(?, ?)', (song_id, playlist_id))
         await db.commit()
-        return cur.lastrowid
 
 async def show_user_history(telegram_id):
     async with aiosqlite.connect(DB_PATH) as db:
@@ -90,3 +91,33 @@ async def find_playlist(name, user_id):
         cur = await db.execute('select id from playlist where name = ? and user_id = ?', (name, user_id))
         res = await cur.fetchone()
         return res[0]
+
+async def find_song(path, user_id):
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute('select id from song where path = ? and user_id = ?', (path, user_id))
+        res = await cur.fetchone()
+        return res[0]
+
+async def find_user_playlists(telegram_id):
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute('''
+        select p.id, p.name
+        from playlist p 
+        join user u 
+        on u.id = p.user_id
+        where u.telegram_id = ?
+        ''', (telegram_id, ))
+        res = await cur.fetchall()
+        return res
+
+async def find_playlist_songs(playlist_id):
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute('''
+        select s.id, s.name, s.author
+        from song s 
+        join playlist_song p 
+        on p.song_id = s.id
+        where p.playlist_id = ?
+        ''', (playlist_id, ))
+        res = await cur.fetchall()
+        return res
