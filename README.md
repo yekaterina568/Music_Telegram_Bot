@@ -22,7 +22,7 @@
 
 Создайте файл `.env` в корне проекта и добавьте туда токен бота:
    ```
-   BOT_TOKEN=abc
+   BOT_TOKEN='abc'
    ```
    Токен можно получить у [@BotFather](https://t.me/BotFather) в Telegram.
 
