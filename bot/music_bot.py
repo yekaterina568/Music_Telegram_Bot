@@ -4,6 +4,7 @@ import os
 import sys
 
 from aiogram import Bot, Dispatcher, F
+from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery, URLInputFile
@@ -20,11 +21,11 @@ from states import Form
 log = logging.getLogger(__name__)
 load_dotenv()
 
-bot_token = os.getenv("BOT_TOKEN").strip()
+bot_token = os.getenv("BOT_TOKEN", "").strip()
 if not bot_token:
     raise RuntimeError("Bot token is not set")
 
-bot = Bot(token=bot_token)
+bot = Bot(token=bot_token, session=AiohttpSession(timeout=200))
 
 dp = Dispatcher()
 dp.callback_query.middleware(CallbackAnswerMiddleware())
@@ -50,7 +51,7 @@ async def find_song(request):
         song_name = track['title']
         song_author = track['author']
         song_path = result.base_url.rstrip('/') + track['url_down']
-    except NoFoundTrack as e:
+    except (NoFoundTrack, IndexError, KeyError) as e:
         log.error(f'Track was not found: {e}')
         return
     return song_name, song_author, song_path
@@ -58,7 +59,7 @@ async def find_song(request):
 
 async def send(song_path, song_name, song_author, message: Message):
     try:
-        file = URLInputFile(song_path, filename=f"{song_name}.mp3", timeout=60)
+        file = URLInputFile(song_path, filename=f"{song_name}.mp3", timeout=200)
         await message.answer_audio(audio=file, title=song_name, performer=song_author)
         log.info(f"Song was sent: {song_name}, {song_author}, {song_path}")
     except Exception as e:
@@ -99,7 +100,7 @@ async def song_id_to_get(call: CallbackQuery, state: FSMContext):
 
 async def get_way_for_playlist(message: Message):
     builder = InlineKeyboardBuilder()
-    builder.button(text='1. Песня из истории прослушивания', callback_data='user_history')
+    builder.button(text='1. Песня из истории прослушивания', callback_data='history_for_playlist')
     builder.button(text="2. Новая песня", callback_data='playlist_new_song')
     builder.adjust(1)
     markup = builder.as_markup()
@@ -145,17 +146,20 @@ async def list_user_playlists(message: Message, telegram_id, use):
     await message.answer(use_case, reply_markup=markup)
 
 
-async def show_history(call: CallbackQuery, state: FSMContext):
+async def gen_show_history(call: CallbackQuery, action: Action):
     history = await db.show_user_history(call.from_user.id)
     if not history:
         await call.message.answer("У тебя пока нет истории")
         return
-    state_data = await state.get_data()
-    playlist_id = state_data.get('playlist_id')
-    if playlist_id is None:
-        await list_songs(history, call.message, Action.GET_SONG + "Твои песни из истории прослушивания:")
-    else:
-        await list_songs(history, call.message, Action.SONG_TO_PLAYLIST + "Твои песни из истории прослушивания:")
+    await list_songs(history, call.message, action + "Твои песни из истории прослушивания:")
+
+
+async def show_history(call: CallbackQuery, state: FSMContext):
+    await gen_show_history(call, Action.GET_SONG)
+
+
+async def show_history_for_playlist(call: CallbackQuery, state: FSMContext):
+    await gen_show_history(call, Action.SONG_TO_PLAYLIST)
 
 
 async def songs_from_playlist(call: CallbackQuery, state: FSMContext):
@@ -185,9 +189,10 @@ async def list_songs(songs: tuple, message: Message, use):
 
 
 async def get_song(song_id, message: Message):
-    if song_id in songs_in_progress:
+    key = (message.chat.id, song_id)
+    if key in songs_in_progress:
         return
-    songs_in_progress.add(song_id)
+    songs_in_progress.add(key)
     try:
         song = await db.find_song_path(song_id)
         song_name, song_author, song_path = song
@@ -196,7 +201,7 @@ async def get_song(song_id, message: Message):
         await message.answer('Не удалось скачать песню. Попробуй еще раз')
         log.error(f"Couldn't download song - {song_id}: {e}")
     finally:
-        songs_in_progress.discard(song_id)
+        songs_in_progress.discard(key)
 
 
 async def song_to_playlist(song_id, message: Message, state: FSMContext):
@@ -213,6 +218,7 @@ CALLBACK_HANDLERS = {
     'helpani': helpani,
     'put_song_to_playlist': ask_for_playlist,
     'user_history': show_history,
+    'history_for_playlist': show_history_for_playlist,
     'playlist_new_song': playlist_new_song,
     'new_playlist': name_playlist,
     'show_playlists': show_playlists,
@@ -304,7 +310,7 @@ async def get_any(message: Message):
 
 async def main():
     await db.init_db()
-    await dp.start_polling(bot, skip_updates=True)
+    await dp.start_polling(bot)
 
 
 if __name__ == '__main__':
