@@ -6,10 +6,9 @@ import sys
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
-from aiogram.types import Message, CallbackQuery, BufferedInputFile
+from aiogram.types import Message, CallbackQuery, URLInputFile
 from aiogram.utils.callback_answer import CallbackAnswerMiddleware
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from aiohttp import ClientSession, ClientTimeout
 from dotenv import load_dotenv
 from parse_hitmos.entered_tracks import EnteredTrack
 from parse_hitmos.excepts import NoFoundTrack
@@ -21,18 +20,11 @@ from states import Form
 log = logging.getLogger(__name__)
 load_dotenv()
 
-bot_token = os.getenv("BOT_TOKEN")
-if bot_token is None:
-    raise ValueError(f"Bot token is not set")
+bot_token = os.getenv("BOT_TOKEN").strip()
+if not bot_token:
+    raise RuntimeError("Bot token is not set")
 
 bot = Bot(token=bot_token)
-
-songs_in_progress = set()
-
-how = 'Для этого отправь автора, название песни (может занять время)'
-help_text = ('1. Нажми старт для начала работы бота \n'
-             '2. Можешь скачать песню в любой момент \n'
-             + f'3. {how}')
 
 dp = Dispatcher()
 dp.callback_query.middleware(CallbackAnswerMiddleware())
@@ -66,26 +58,12 @@ async def find_song(request):
 
 async def send(song_path, song_name, song_author, message: Message):
     try:
-        file = await(download_song(song_path))
+        file = URLInputFile(song_path, filename=f"{song_name}.mp3", timeout=60)
         await message.answer_audio(audio=file, title=song_name, performer=song_author)
         log.info(f"Song was sent: {song_name}, {song_author}, {song_path}")
     except Exception as e:
         await message.answer('Не удалось скачать песню. Попробуй еще раз')
         log.error(f"Couldn't download song - {song_path}: {e}")
-
-
-async def download_song(url):
-    if url.endswith('.mp3'):
-        try:
-            timeout = ClientTimeout(total=60)
-            async with ClientSession(timeout=timeout) as session:
-                async with session.get(url) as response:
-                    data = await response.read()
-                    return BufferedInputFile(data, "song.mp3")
-        except Exception as e:
-            log.error(f"Couldn't download song by {url}: {e}")
-            raise
-    raise ValueError(f"Invalid url for downloading the song: {url}")
 
 
 async def name_playlist(call: CallbackQuery, state: FSMContext):
@@ -218,7 +196,7 @@ async def get_song(song_id, message: Message):
         await message.answer('Не удалось скачать песню. Попробуй еще раз')
         log.error(f"Couldn't download song - {song_id}: {e}")
     finally:
-        songs_in_progress.remove(song_id)
+        songs_in_progress.discard(song_id)
 
 
 async def song_to_playlist(song_id, message: Message, state: FSMContext):
@@ -296,7 +274,10 @@ async def new_playlist(message: Message, state: FSMContext):
 
 @dp.message(Form.waiting_song_for_playlist)
 async def new_song_to_playlist(message: Message, state: FSMContext):
-    song_res = await find_song(message.text.rstrip())
+    if message.text is None:
+        await message.answer('Неверный ввод песни. Попробуй еще раз')
+        return
+    song_res = await find_song(message.text)
     if song_res is None:
         await message.answer('Не нашел трек, попробуй еще раз')
         return
@@ -308,6 +289,9 @@ async def new_song_to_playlist(message: Message, state: FSMContext):
 
 @dp.message()
 async def get_any(message: Message):
+    if message.text is None:
+        await message.answer('Неверный ввод песни. Попробуй еще раз')
+        return
     song = await find_song(message.text)
     if song is None:
         await message.answer('Не нашел трек, попробуй еще раз')
