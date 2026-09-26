@@ -51,7 +51,7 @@ async def find_song(request):
         song_name = track['title']
         song_author = track['author']
         song_path = result.base_url.rstrip('/') + track['url_down']
-    except (NoFoundTrack, IndexError, KeyError) as e:
+    except NoFoundTrack as e:
         log.error(f'Track was not found: {e}')
         return
     return song_name, song_author, song_path
@@ -80,7 +80,12 @@ async def ask_for_playlist(call: CallbackQuery, state: FSMContext):
 async def to_playlist(call: CallbackQuery, state: FSMContext):
     playlist_id = int(call.data[1:])
     await state.update_data(playlist_id=playlist_id)
-    await get_way_for_playlist(call.message)
+    builder = InlineKeyboardBuilder()
+    builder.button(text='1. Песня из истории прослушивания', callback_data='history_for_playlist')
+    builder.button(text="2. Новая песня", callback_data='playlist_new_song')
+    builder.adjust(1)
+    markup = builder.as_markup()
+    await call.message.answer('Выбери способ добавления в плейлист: ', reply_markup=markup)
 
 
 async def playlist_song_id(call: CallbackQuery, state: FSMContext):
@@ -96,15 +101,6 @@ async def playlist_new_song(call: CallbackQuery, state: FSMContext):
 async def song_id_to_get(call: CallbackQuery, state: FSMContext):
     song_id = int(call.data[1:])
     await get_song(song_id, call.message)
-
-
-async def get_way_for_playlist(message: Message):
-    builder = InlineKeyboardBuilder()
-    builder.button(text='1. Песня из истории прослушивания', callback_data='history_for_playlist')
-    builder.button(text="2. Новая песня", callback_data='playlist_new_song')
-    builder.adjust(1)
-    markup = builder.as_markup()
-    await message.answer('Выбери способ добавления в плейлист: ', reply_markup=markup)
 
 
 async def resolve_playlist(call: CallbackQuery, state: FSMContext):
@@ -163,10 +159,8 @@ async def show_history_for_playlist(call: CallbackQuery, state: FSMContext):
 
 
 async def songs_from_playlist(call: CallbackQuery, state: FSMContext):
-    state_data = await state.get_data()
-    playlist_id = state_data.get('show_playlist_id')
+    playlist_id = await get_playlist_id('show_playlist_id', call.message, state)
     if playlist_id is None:
-        await call.message.answer("Что-то пошло не так. Попробуй еще раз")
         return
     playlist_songs = await db.find_playlist_songs(playlist_id)
     if not playlist_songs:
@@ -174,6 +168,15 @@ async def songs_from_playlist(call: CallbackQuery, state: FSMContext):
         return
     await list_songs(playlist_songs, call.message, Action.GET_SONG + 'Текущие песни в плейлисте:')
     await state.clear()
+
+
+async def get_playlist_id(data_name, message: Message, state: FSMContext):
+    state_data = await state.get_data()
+    playlist_id = state_data.get(data_name)
+    if playlist_id is None:
+        await message.answer("Что-то пошло не так. Попробуй еще раз")
+        return
+    return playlist_id
 
 
 async def list_songs(songs: tuple, message: Message, use):
@@ -205,8 +208,9 @@ async def get_song(song_id, message: Message):
 
 
 async def song_to_playlist(song_id, message: Message, state: FSMContext):
-    playlist = await state.get_data()
-    playlist_id = playlist['playlist_id']
+    playlist_id = await get_playlist_id('playlist_id', message, state)
+    if playlist_id is None:
+        return
     await db.add_playlist_song(song_id, playlist_id)
     playlist_songs = await db.find_playlist_songs(playlist_id)
     await list_songs(playlist_songs, message, Action.GET_SONG + 'Текущие песни в плейлисте:')
