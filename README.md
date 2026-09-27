@@ -13,7 +13,7 @@
 
 - [aiogram](https://docs.aiogram.dev/) — асинхронный фреймворк для Telegram-ботов
 - [aiosqlite](https://github.com/omnilib/aiosqlite) — асинхронная работа с SQLite, прост в использовании
-- [aiohttp](https://docs.aiohttp.org/) — асинхронные HTTP-запросы для скачивания файлов
+- [python-dotenv](https://pypi.org/project/python-dotenv/) — для загрузки переменных окружения
 - [parse_hitmos](https://github.com/JoyHubN/pars_hitmos) — парсер для поиска треков
 
 Скачивание песни может занять время. Но бот работает асинхронно, поэтому можно делать несколько запросов одновременно.
