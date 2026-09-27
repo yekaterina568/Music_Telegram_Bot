@@ -4,7 +4,6 @@ import os
 import sys
 
 from aiogram import Bot, Dispatcher, F
-from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery, URLInputFile
@@ -25,7 +24,7 @@ bot_token = os.getenv("BOT_TOKEN", "").strip()
 if not bot_token:
     raise RuntimeError("Bot token is not set")
 
-bot = Bot(token=bot_token, session=AiohttpSession(timeout=200))
+bot = Bot(token=bot_token)
 
 dp = Dispatcher()
 dp.callback_query.middleware(CallbackAnswerMiddleware())
@@ -58,8 +57,11 @@ async def find_song(request):
 
 
 async def send(song_path, song_name, song_author, message: Message):
+    if not song_path.startswith('https://eu.hitmoz.com/get/music/') or not song_path.endswith('.mp3'):
+        await message.answer('Что-то пошло не так. Попробуй еще раз')
+        return
     try:
-        file = URLInputFile(song_path, filename=f"{song_name}.mp3", timeout=200)
+        file = URLInputFile(song_path, filename=f"{song_name}.mp3", timeout=60)
         await message.answer_audio(audio=file, title=song_name, performer=song_author)
         log.info(f"Song was sent: {song_name}, {song_author}, {song_path}")
     except Exception as e:
@@ -78,7 +80,9 @@ async def ask_for_playlist(call: CallbackQuery, state: FSMContext):
 
 
 async def to_playlist(call: CallbackQuery, state: FSMContext):
-    playlist_id = int(call.data[1:])
+    playlist_id = await get_id(call)
+    if playlist_id is None:
+        return
     await state.update_data(playlist_id=playlist_id)
     builder = InlineKeyboardBuilder()
     builder.button(text='1. Песня из истории прослушивания', callback_data='history_for_playlist')
@@ -89,7 +93,9 @@ async def to_playlist(call: CallbackQuery, state: FSMContext):
 
 
 async def playlist_song_id(call: CallbackQuery, state: FSMContext):
-    song_id = int(call.data[1:])
+    song_id = await get_id(call)
+    if song_id is None:
+        return
     await song_to_playlist(song_id, call.message, state)
 
 
@@ -99,8 +105,20 @@ async def playlist_new_song(call: CallbackQuery, state: FSMContext):
 
 
 async def song_id_to_get(call: CallbackQuery, state: FSMContext):
-    song_id = int(call.data[1:])
+    song_id = await get_id(call)
+    if song_id is None:
+        return
     await get_song(song_id, call.message)
+
+
+async def get_id(call: CallbackQuery):
+    try:
+        parsed_id = int(call.data[1:])
+        return parsed_id
+    except ValueError as e:
+        await call.message.answer("Что-то пошло не так. Попробуй еще раз")
+        log.error(f"Couldn't parse id from call data = {call.data} : {e}")
+        return
 
 
 async def resolve_playlist(call: CallbackQuery, state: FSMContext):
@@ -121,7 +139,9 @@ async def show_playlists(call: CallbackQuery, state: FSMContext):
 
 
 async def current_playlists(call: CallbackQuery, state: FSMContext):
-    playlist_id = int(call.data[1:])
+    playlist_id = await get_id(call)
+    if playlist_id is None:
+        return
     await state.update_data(show_playlist_id=playlist_id)
     await songs_from_playlist(call, state)
 
